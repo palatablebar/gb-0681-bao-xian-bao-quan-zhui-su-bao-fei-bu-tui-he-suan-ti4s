@@ -11,13 +11,40 @@ def payload():
     if 'csv' in data and not isinstance(data['csv'],str):raise DomainError('CSV','CSV内容必须是文本')
     sample=data.get('sample',request.args.get('sample','dirty.csv'))
     content=data.get('csv')
-    return (content.encode() if isinstance(content,str) else load(sample)),data.get('parameters',{})
+    return {'content':content.encode() if isinstance(content,str) else load(sample),
+            'parameters':data.get('parameters',{}),
+            'source':data.get('source',request.headers.get('X-Source-Channel')),
+            'filename':data.get('filename') or (sample if content is None else None)}
+
+def submit_payload():
+    data=payload()
+    return store.receive(data['content'],data['parameters'],data['source'],data['filename'])
 
 def api(stage):
-    content,parameters=payload();return jsonify(run(content,parameters,stage))
+    data=payload();return jsonify(run(data['content'],data['parameters'],stage))
 
 def page(stage,template):
     latest=store.history();state=store.get(latest[0]['id']) if latest else run(load('dirty.csv'),{})
     source=load(request.args['sample']) if 'sample' in request.args else base64.b64decode(state['source_b64']) if state.get('source_b64') else load('dirty.csv')
     data=run(source,state.get('manifest',{}).get('parameters',{}),stage)
-    return render_template(template,title=TITLE,short=SHORT,modules=MODULES,current=stage,data=data,run=state,history=latest)
+    if data['run_id']==state['run_id']:
+        # Page and closing download describe the same batch: identity,
+        # reception ledger and archive checksum all come from the stored batch.
+        data['receptions']=state.get('receptions',[])
+        data['reception_count']=state.get('reception_count',0)
+        data['adoption_basis']=state.get('adoption_basis',[])
+        data['pending_reception_count']=state.get('pending_reception_count',0)
+        data['batch_id']=state['run_id']
+        if state.get('archive'):
+            data['archive']=state['archive']
+        data['publish']=state.get('publish')
+    else:
+        # Previewing another sample: never borrow the visible batch's identity
+        # or its reception ledger.
+        data['batch_id']=data['run_id'];data['receptions']=[]
+        data['reception_count']=0;data['adoption_basis']=[];data['pending_reception_count']=0
+        data['preview']={'sample':request.args.get('sample'),'visible_batch':state['run_id']}
+        if data.get('archive'):
+            data['archive']['ready']=False
+    return render_template(template,title=TITLE,short=SHORT,modules=MODULES,current=stage,data=data,run=state,
+        history=latest,reception_queue=store.receptions())

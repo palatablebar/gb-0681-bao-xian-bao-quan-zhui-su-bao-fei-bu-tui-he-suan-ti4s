@@ -13,6 +13,7 @@
 | M5 保费重算 | 查看并复算保费重算 | `/api/m5_calculate` | `app/modules/m5_calculate/rules.py` | `tests/test_calculate.py` |
 | M6 补退对账 | 查看并复算补退对账 | `/api/m6_reconcile` | `app/modules/m6_reconcile/compare.py` | `tests/test_reconcile.py` |
 | M7 结案归档 | 查看并复算结案归档 | `/api/m7_archive` | `app/modules/m7_archive/export_out.py` | `tests/test_archive.py` |
+| 接收台账 | 辨认重复送达、下载原始文件 | `/api/receptions` | `app/store.py` | `tests/test_reception.py` |
 
 ## 陷阱登记
 
@@ -31,10 +32,14 @@
 | TRAP-26 | 旧版本复核 | 覆盖新结论 | 事务条件更新 | `app/store.py` | `tests/test_archive.py::test_stale_review` |
 | TRAP-23 | 生效日端点 | 双计生效日 | 半开区间 | `app/modules/m4_segments/rules.py` | `tests/test_segments.py::test_halfopen_conservation` |
 | TRAP-24 | 分币尾差 | 段合计不等 | 最大余额法 | `app/modules/m5_calculate/rules.py` | `tests/test_calculate.py::test_largest_remainder_conserves` |
+| TRAP-27 | 重复送达 | 按字节立多个批次 | 逻辑内容归并+接收台账 | `app/canonical.py`、`app/store.py` | `tests/test_reception.py::test_encoding_row_and_filename_do_not_fork_batches` |
+| TRAP-28 | 来源被覆盖 | 后到批次覆盖前次 | 接收追加、原文留存 | `app/store.py` | `tests/test_reception.py::test_every_reception_keeps_its_own_original` |
+| TRAP-29 | 发布切换失败 | 旧结论丢失 | 台账先落库、指针后发布 | `app/store.py` | `tests/test_reception.py::test_publish_failure_keeps_old_conclusion` |
+| TRAP-30 | 重试新增版本 | 重算并推进签审 | 同批次幂等，仅记接收 | `app/store.py` | `tests/test_reception.py::test_retry_after_signoff_adds_no_calculation_or_version` |
 
 ## 对账规则
 
-输入行数=采纳+隔离+空行+重复表头+完全重复；业务总数与计算证据独立求和。隔离行保留来源行、ID、原因码与原值。
+输入行数=采纳+隔离+空行+重复表头+完全重复；业务总数与计算证据独立求和。隔离行保留来源行、ID、原因码与原值。批次身份按逻辑内容计算，结案证据同时列出运行清单、批次身份、逐次接收（渠道/文件/时间/摘要/去向/依据）、对账、计算与隔离；页面哈希与下载文件哈希一致。
 
 ## 已知不覆盖
 

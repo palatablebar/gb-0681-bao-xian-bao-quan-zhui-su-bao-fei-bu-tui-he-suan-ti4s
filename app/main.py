@@ -1,10 +1,9 @@
-import importlib,os
+import importlib
 from flask import Flask,jsonify,request,redirect,Response
 from app.config import MODULES
 from app.errors import DomainError
-from app.workflow import run,load
+from app.workflow import load
 from app import store
-from app.web import payload
 from app.modules.m7_archive.export_out import bundle
 
 def create_app():
@@ -20,7 +19,11 @@ def create_app():
     def health():return jsonify(status='ok')
     @app.post('/api/runs')
     def submit():
-        content,params=payload();state=run(content,params);return jsonify(store.save(state['run_id'],state))
+        from app.web import submit_payload
+        state=submit_payload()
+        response=jsonify(state)
+        if not state.get('publish',{}).get('ok',True):response.status_code=503
+        return response
     @app.get('/api/runs')
     def list_runs():return jsonify(store.history())
     @app.get('/api/runs/<run_id>')
@@ -29,15 +32,44 @@ def create_app():
     def review(run_id):
         data=request.get_json(silent=True) or {}
         if not isinstance(data.get('version'),int):raise DomainError('VERSION','请提交复核版本')
-        return jsonify(store.review(run_id,data['version'],data.get('decision')))
+        state=store.review(run_id,data['version'],data.get('decision'))
+        # Every arrival must end with a destination.  Settling only rewrites
+        # reception dispositions; it never adds a calculation row or a sign-off
+        # version.
+        if len(state.get('receptions',[]))>1:
+            store.settle(run_id)
+            state=store.get(run_id)
+        return jsonify(state)
     @app.get('/api/archive/<run_id>/export.csv')
     def download(run_id):
         state=store.get(run_id)
         if not state.get('reconcile',{}).get('balanced'):raise DomainError('UNBALANCED','对账未平')
+        # Pending receptions still appear in the bundle with their disposition,
+        # so the export never hides an arrival; the page marks the batch unready.
         return Response(bundle(state),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename=evidence.csv'})
+    @app.get('/api/receptions')
+    def list_receptions():
+        batch=request.args.get('batch_id') or None
+        return jsonify(store.receptions(batch))
+    @app.post('/api/receptions/identify')
+    def identify_receptions():
+        data=request.get_json(silent=True) or {}
+        if not isinstance(data,dict):raise DomainError('PAYLOAD','请求必须是对象')
+        batch_id=data.get('batch_id') or None
+        reception_id=data.get('reception_id')
+        if reception_id is not None and not isinstance(reception_id,int):raise DomainError('RECEPTION','接收编号无效')
+        if batch_id is not None and not isinstance(batch_id,str):raise DomainError('BATCH','批次编号无效')
+        return jsonify(store.identify(batch_id=batch_id,reception_id=reception_id))
+    @app.get('/api/receptions/<int:reception_id>/source')
+    def reception_source(reception_id):
+        filename,body=store.reception_source(reception_id)
+        safe=''.join(c for c in filename if c.isalnum() or c in '._-()（）') or 'source.csv'
+        return Response(body,mimetype='application/octet-stream',headers={
+            'Content-Disposition':'attachment; filename="reception-%d-%s"'%(reception_id,safe)})
     with app.app_context():
+        store.migrate_legacy()
         if not store.history():
-            state=run(load('dirty.csv'),{});store.save(state['run_id'],state)
+            store.receive(load('dirty.csv'),{},'样例','dirty.csv')
     return app
 
 app=create_app()
